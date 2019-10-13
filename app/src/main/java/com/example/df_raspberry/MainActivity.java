@@ -80,6 +80,7 @@ public class MainActivity extends Activity {
             @Override
             public void run() {
                 try {
+                    writeUartData(uartDevice, (byte)10, 500);
                     Message_Main();
                 } catch (IOException e) {
                     e.printStackTrace();
@@ -189,11 +190,10 @@ public class MainActivity extends Activity {
             }
             if(Data == SendData_End){
                 ReceiveData_Ready = false;
-                if((ReceiveData_Data % CRC_BASE) != 0){
+                if((ReceiveData_Data % CRC_BASE) == 0){
                     Store_Message[Store_Size] = ReceiveData_Data;
                     Store_Size++;
                 }
-                Log.d(TAG, "ReceiveData_Data: " + ReceiveData_Data);
                 return;
             }
             if(ReceiveData_Ready && ReceiveData_Location > -1){
@@ -223,7 +223,7 @@ public class MainActivity extends Activity {
         if(Store_Size > 0){
             long Readed_Message = Store_Message[Store_Size -1];
             Store_Size--;
-            byte Readed_Command = (byte)((Readed_Message >>> 24) & 0xFF);
+            byte Readed_Command = (byte)((Readed_Message >>> 24) & 0x7F);
             int Readed_Value = (int)((Readed_Message >>> 8) & 0xFFFF);
 
             Log.d(TAG, "Message | Command | Value : " + Readed_Message + " | " + Readed_Command + " | " + Readed_Value);
