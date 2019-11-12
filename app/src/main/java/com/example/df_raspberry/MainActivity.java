@@ -6,11 +6,17 @@ import android.app.Activity;
 import android.os.Bundle;
 import android.util.Log;
 
+import com.github.nkzawa.emitter.Emitter;
+import com.github.nkzawa.socketio.client.IO;
 import com.google.android.things.pio.PeripheralManager;
 import com.google.android.things.pio.UartDevice;
 import com.google.android.things.pio.UartDeviceCallback;
 
+import org.json.JSONException;
+import org.json.JSONObject;
+
 import java.io.IOException;
+import java.net.URISyntaxException;
 import java.util.List;
 import java.util.Timer;
 import java.util.TimerTask;
@@ -21,6 +27,19 @@ import java.util.TimerTask;
  * baud rate will be transferred back out the same UART.
  */
 public class MainActivity extends Activity {
+    // Socket IO connect to server
+    private com.github.nkzawa.socketio.client.Socket mSocket;
+
+    {
+        try {
+            mSocket = IO.socket("http://192.168.137.128:3000");
+            Log.d("test somthing", "test here");
+
+        } catch (URISyntaxException e) {
+            Log.d("test somthing", "can not connect");
+        }
+    }
+
     // UART Configuration Parameters
     private static final String TAG = MainActivity.class.getSimpleName();
     private static final String UART_DEVICE_NAME = "UART0";
@@ -36,7 +55,20 @@ public class MainActivity extends Activity {
     private PeripheralManager mService;
     private UartDevice uartDevice;
 
-    //Read command----------------------------------------
+    //Định nghĩa lệnh. Khoảng giá trị từ -128 đến 127. Tuy nhiên hiện tại chỉ nên dùng từ 0 đến 127. Lỗi chưa xác định.----------------------------------------
+    //==================================================
+    //Arduino command list
+    //--------------------------------------------------
+    private static final byte AR_NhietDo = 10;
+    private static final byte AR_DoAm = 11;
+    private static final byte AR_Den = 20;
+    //Arduino value list
+    //--------------------------------------------------
+    private static int AR_Value_NhietDo = 0;
+    private static int AR_Value_DoAm = 0;
+    //==================================================
+
+    //Read command Arduino----------------------------------------
     private static long[] Store_Message = new long[32];
     int Store_Size = 0;
     private static final int CRC_BASE = 13; // 13
@@ -47,14 +79,68 @@ public class MainActivity extends Activity {
     private static byte ReceiveData_Location;
     private static boolean ReceiveData_Ready = false;
 
-    //Định nghĩa lệnh. Khoảng giá trị từ -128 đến 127. Tuy nhiên hiện tại chỉ nên dùng từ 0 đến 127. Lỗi chưa xác định.----------------------------------------
-    private static final byte NhietDo = 0;
-    private static final byte DoAm = 1;
+    //Send command Socket--------------------------------------------------
+    private static String[] Socket_send_command = new String[32];
+    private static int[] Socket_send_value = new int[32];
+    private static int Socket_send_size = 0;
+    //Read command Socket--------------------------------------------------
+    private static String[] Socket_read_command = new String[32];
+    private static int[] Socket_read_value = new int[32];
+    private static int Socket_read_size = 0;
+    //Socket Listener============================================================
+    private Emitter.Listener S_Den = new Emitter.Listener() {
+        @Override
+        public void call(Object... args) {
+            JSONObject object = (JSONObject) args[0];
+            try {
+
+//                String data = object.getString("noidung");
+                JSONObject data = object.getJSONObject("noidung");
+                String enable = data.getString("status");
+//                String enable = object.getString("enable");
+                Log.d("data receive led", enable);
+                //--------------------------------------------------
+                Socket_read_command[Socket_read_size] = "Den";
+                Socket_read_value[Socket_read_size] = Integer.parseInt(enable);
+                Socket_read_size++;
+            } catch (JSONException e) {
+                e.printStackTrace();
+            }
+        }
+    };
+    private Emitter.Listener S_getsensor = new Emitter.Listener() {
+        @Override
+        public void call(Object... args) {
+            JSONObject object = (JSONObject) args[0];
+            try {
+//                String data = object.getString("noidung");
+                JSONObject data = object.getJSONObject("noidung");
+                String enable = data.getString("status");
+//                String enable = object.getString("enable");
+                Log.d("data receive sensor", enable);
+                //--------------------------------------------------
+                Socket_read_command[Socket_read_size] = "GetSensor";
+                Socket_read_value[Socket_read_size] = Integer.parseInt(enable);
+                Socket_read_size++;
+            } catch (JSONException e) {
+                e.printStackTrace();
+            }
+        }
+    };
+    //==================================================
+    //Socket command list
+    
+    //--------------------------------------------------
+    //private static final String
+    //==================================================
+
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-
+        mSocket.connect();
+        mSocket.on("server_send_data", S_Den);
+        mSocket.on("server_send_getsensor", S_getsensor);
         mService = PeripheralManager.getInstance();
         List<String> deviceList = mService.getUartDeviceList();
         if (deviceList.isEmpty()) {
@@ -64,7 +150,7 @@ public class MainActivity extends Activity {
             // Mo thiet bi uart
             try {
                 openUart(UART_DEVICE_NAME, BAUD_RATE1);
-                if(uartDevice != null) {
+                if (uartDevice != null) {
                     Log.d("OpenUartDevice", "Success.");
                     setupTask();
                 }
@@ -73,6 +159,7 @@ public class MainActivity extends Activity {
             }
         }
     }
+
     //Vòng lặp mỗi 1s==================================================
     private void setupTask() {
         Timer aTimer = new Timer();
@@ -80,29 +167,12 @@ public class MainActivity extends Activity {
             @Override
             public void run() {
                 try {
-                    writeUartData(uartDevice, (byte)10, 500);
                     Message_Main();
+                    ReadMessage_Server();
+                    SendMessage_Server();
                 } catch (IOException e) {
                     e.printStackTrace();
                 }
-/*
-                if(LED_FAG) {
-                    try {
-                        writeUartData(uartDevice, NhietDo, 8765);
-                    } catch (IOException e) {
-                        e.printStackTrace();
-                    }
-                }
-                else {
-                    try {
-                        writeUartData(uartDevice, DoAm, 9876);
-                    } catch (IOException e) {
-                        e.printStackTrace();
-                    }
-                }
-                LED_FAG = !LED_FAG;
-
-                 */
             }
         };
         aTimer.schedule(aTask, 0, DURATION);
@@ -111,7 +181,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
-
+        mSocket.disconnect();
         // Attempt to close the UART device
         try {
             closeUart();
@@ -173,42 +243,44 @@ public class MainActivity extends Activity {
             }
         }
     }
+
     //Đọc dữ liệu nhận được và giải mã ra lệnh và lưu vào Store_Message==================================================
     public void readUartBuffer(UartDevice uart) throws IOException {
         // Maximum amount of data to read at one time
         byte[] buffer = new byte[CHUNK_SIZE];
         while ((uart.read(buffer, buffer.length)) > 0) {
-            char Data = (char)buffer[0];
-            if(Data == '\n'){
+            char Data = (char) buffer[0];
+            if (Data == '\n') {
                 return;
             }
-            if(Data == SendData_Start){
+            if (Data == SendData_Start) {
                 ReceiveData_Ready = true;
                 ReceiveData_Data = 0;
                 ReceiveData_Location = 7;
                 return;
             }
-            if(Data == SendData_End){
+            if (Data == SendData_End) {
                 ReceiveData_Ready = false;
-                if((ReceiveData_Data % CRC_BASE) == 0){
+                if ((ReceiveData_Data % CRC_BASE) == 0) {
                     Store_Message[Store_Size] = ReceiveData_Data;
                     Store_Size++;
                 }
                 return;
             }
-            if(ReceiveData_Ready && ReceiveData_Location > -1){
-                ReceiveData_Data = ReceiveData_Data | (Long.parseLong(Character.toString(Data), 16) << (ReceiveData_Location*4));
+            if (ReceiveData_Ready && ReceiveData_Location > -1) {
+                ReceiveData_Data = ReceiveData_Data | (Long.parseLong(Character.toString(Data), 16) << (ReceiveData_Location * 4));
                 ReceiveData_Location--;
                 return;
             }
         }
     }
+
     //Chuyển đổi nội dung lệnh Intel-Data sang định dạng gói tin "@IntelData," rồi gửi lên đường truyền==================================================
     public void writeUartData(UartDevice uart, byte Intel, int Data) throws IOException {
         long SendData_reg;
-        SendData_reg = (long)1 << 31;
-        SendData_reg = SendData_reg | ((long)Intel << 24);
-        SendData_reg = SendData_reg | ((long)Data << 8);
+        SendData_reg = (long) 1 << 31;
+        SendData_reg = SendData_reg | ((long) Intel << 24);
+        SendData_reg = SendData_reg | ((long) Data << 8);
         long CRC_odd = SendData_reg % CRC_BASE;
         CRC_odd = CRC_BASE - CRC_odd;
         SendData_reg = SendData_reg | CRC_odd;
@@ -218,15 +290,74 @@ public class MainActivity extends Activity {
         uart.flush(UartDevice.FLUSH_OUT);
         Log.d(TAG, "Message: " + new String(buffer) + " length = " + count + " bytes");
     }
-    //Đọc và xử lý lệnh đang có trong Store_Message==================================================
-    public void Message_Main() throws IOException {
-        if(Store_Size > 0){
-            long Readed_Message = Store_Message[Store_Size -1];
-            Store_Size--;
-            byte Readed_Command = (byte)((Readed_Message >>> 24) & 0x7F);
-            int Readed_Value = (int)((Readed_Message >>> 8) & 0xFFFF);
 
+    //Đọc và xử lý lệnh đang có trong Store_Message từ Arduino==================================================
+    public void Message_Main() throws IOException {
+        while (Store_Size > 0) {
+            long Readed_Message = Store_Message[Store_Size - 1];
+            Store_Size--;
+            byte Readed_Command = (byte) ((Readed_Message >>> 24) & 0x7F);
+            int Readed_Value = (int) ((Readed_Message >>> 8) & 0xFFFF);
             Log.d(TAG, "Message | Command | Value : " + Readed_Message + " | " + Readed_Command + " | " + Readed_Value);
+
+            switch (Readed_Command) {
+                case AR_NhietDo:
+                    AR_Value_NhietDo = Readed_Value;
+                    Log.d(TAG, "AR_Value_NhietDo has been updated. Value = " + AR_Value_NhietDo);
+                    break;
+                case AR_DoAm:
+                    AR_Value_DoAm = Readed_Value;
+                    Log.d(TAG, "AR_Value_DoAm has been updated. Value = " + AR_Value_DoAm);
+                    break;
+                default:
+                    Log.d(TAG, "Undefined command.");
+                    break;
+            }
         }
     }
+
+    //Gửi dữ liệu lên Server Socket==================================================
+    public void SendMessage_Server() {
+        JSONObject my_obj = new JSONObject();
+        boolean my_obj_check = false;
+        while (Socket_send_size > 0) {
+            Socket_send_size--;
+            try {
+                my_obj.put(Socket_send_command[Socket_send_size], Socket_send_value[Socket_send_size]);
+            } catch (JSONException e) {
+                e.printStackTrace();
+            }
+            Log.d(TAG, "Message to Server: put");
+            my_obj_check = true;
+        }
+        if (my_obj_check) {
+            mSocket.emit("rasp_send_data", my_obj);
+            Log.d(TAG, "Message to Server: done");//Không biết viết log thế nào luôn.
+        }
+    }
+
+    //Đọc và xử lý lệnh từ Server==================================================
+    public void ReadMessage_Server() throws IOException {
+        while (Socket_read_size > 0) {
+            Socket_read_size--;
+            switch (Socket_read_command[Socket_read_size]) {
+                case "Den":
+                    writeUartData(uartDevice, AR_Den, Socket_read_value[Socket_read_size]);
+                    break;
+                case "GetSensor":
+                    Socket_send_command[Socket_send_size] = "NhietDo";
+                    Socket_send_value[Socket_send_size] = AR_Value_NhietDo;
+                    Socket_send_size++;
+                    Socket_send_command[Socket_send_size] = "DoAm";
+                    Socket_send_value[Socket_send_size] = AR_Value_DoAm;
+                    Socket_send_size++;
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
+    //==================================================
+    //Đảm bảo gói tin truyền nhận được.
+    //==================================================
 }
