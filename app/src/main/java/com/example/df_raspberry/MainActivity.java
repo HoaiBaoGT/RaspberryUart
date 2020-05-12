@@ -55,13 +55,15 @@ public class MainActivity extends Activity {
     private PeripheralManager mService;
     private UartDevice uartDevice;
 
-    //Định nghĩa lệnh. Khoảng giá trị từ -128 đến 127. Tuy nhiên hiện tại chỉ nên dùng từ 0 đến 127. Lỗi chưa xác định.----------------------------------------
+    //----------------------------------------
     //==================================================
     //Arduino command list
     //--------------------------------------------------
     private static final byte AR_NhietDo = 10;
     private static final byte AR_DoAm = 11;
-    private static final byte AR_Den = 20;
+    private static final byte AR_Quat = 20;
+    private static final byte AR_ACS_Quat = 30;
+
     //Arduino value list
     //--------------------------------------------------
     private static int AR_Value_NhietDo = 0;
@@ -84,11 +86,11 @@ public class MainActivity extends Activity {
     private static int[] Socket_send_value = new int[32];
     private static int Socket_send_size = 0;
     //Read command Socket--------------------------------------------------
-    private static String[] Socket_read_command = new String[32];
+    private static int[] Socket_read_command = new int[32];
     private static int[] Socket_read_value = new int[32];
     private static int Socket_read_size = 0;
     //Socket Listener============================================================
-    private Emitter.Listener S_Den = new Emitter.Listener() {
+    private Emitter.Listener S_Quat = new Emitter.Listener() {
         @Override
         public void call(Object... args) {
             JSONObject object = (JSONObject) args[0];
@@ -100,7 +102,7 @@ public class MainActivity extends Activity {
 //                String enable = object.getString("enable");
                 Log.d("data receive led", enable);
                 //--------------------------------------------------
-                Socket_read_command[Socket_read_size] = "Den";
+                Socket_read_command[Socket_read_size] = SR_Quat_Command;
                 Socket_read_value[Socket_read_size] = Integer.parseInt(enable);
                 Socket_read_size++;
             } catch (JSONException e) {
@@ -119,7 +121,7 @@ public class MainActivity extends Activity {
 //                String enable = object.getString("enable");
                 Log.d("data receive sensor", enable);
                 //--------------------------------------------------
-                Socket_read_command[Socket_read_size] = "GetSensor";
+                Socket_read_command[Socket_read_size] = SR_Sensor_Command;
                 Socket_read_value[Socket_read_size] = Integer.parseInt(enable);
                 Socket_read_size++;
             } catch (JSONException e) {
@@ -129,9 +131,14 @@ public class MainActivity extends Activity {
     };
     //==================================================
     //Socket command list
-    
+    private static final byte SR_Sensor_Command = 10;
+    private static final byte SR_Quat_Command = 20;
+    private static final byte SR_ACS_Quat = 30;
+
+
     //--------------------------------------------------
-    //private static final String
+    //Socket value list
+    private static final String AS_Value = "";
     //==================================================
 
 
@@ -139,7 +146,7 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         mSocket.connect();
-        mSocket.on("server_send_data", S_Den);
+        mSocket.on("server_send_data", S_Quat);
         mSocket.on("server_send_getsensor", S_getsensor);
         mService = PeripheralManager.getInstance();
         List<String> deviceList = mService.getUartDeviceList();
@@ -288,7 +295,7 @@ public class MainActivity extends Activity {
         byte[] buffer = (SendData_Start + Long.toHexString(SendData_reg) + SendData_End).getBytes();
         int count = uart.write(buffer, buffer.length);
         uart.flush(UartDevice.FLUSH_OUT);
-        Log.d(TAG, "Message: " + new String(buffer) + " length = " + count + " bytes");
+        Log.d(TAG, "Message: " + new String(buffer));
     }
 
     //Đọc và xử lý lệnh đang có trong Store_Message từ Arduino==================================================
@@ -308,6 +315,16 @@ public class MainActivity extends Activity {
                 case AR_DoAm:
                     AR_Value_DoAm = Readed_Value;
                     Log.d(TAG, "AR_Value_DoAm has been updated. Value = " + AR_Value_DoAm);
+                    break;
+                case AR_Quat:
+                    AR_Value_DoAm = Readed_Value;
+                    Socket_send_command[Socket_send_size] = "Relay";
+                    Socket_send_value[Socket_send_size] = Readed_Value;
+                    Socket_send_size++;
+                    Log.d(TAG, "Relay = " + Readed_Value);
+                    break;
+                case AR_ACS_Quat:
+                    Log.d(TAG, "AR_ACS_Quat = " + Readed_Value);
                     break;
                 default:
                     Log.d(TAG, "Undefined command.");
@@ -341,10 +358,10 @@ public class MainActivity extends Activity {
         while (Socket_read_size > 0) {
             Socket_read_size--;
             switch (Socket_read_command[Socket_read_size]) {
-                case "Den":
-                    writeUartData(uartDevice, AR_Den, Socket_read_value[Socket_read_size]);
+                case SR_Quat_Command:
+                    writeUartData(uartDevice, AR_Quat, Socket_read_value[Socket_read_size]);
                     break;
-                case "GetSensor":
+                case SR_Sensor_Command:
                     Socket_send_command[Socket_send_size] = "NhietDo";
                     Socket_send_value[Socket_send_size] = AR_Value_NhietDo;
                     Socket_send_size++;
