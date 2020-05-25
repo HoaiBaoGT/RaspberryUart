@@ -12,6 +12,7 @@ import com.google.android.things.pio.PeripheralManager;
 import com.google.android.things.pio.UartDevice;
 import com.google.android.things.pio.UartDeviceCallback;
 
+import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -32,7 +33,10 @@ public class MainActivity extends Activity {
 
     {
         try {
-            mSocket = IO.socket("http://192.168.137.128:3000");
+            mSocket = IO.socket("http://52.163.241.147:5000");
+            String ten_cua_may = "abc123";
+            mSocket.emit("rasp-ready", ten_cua_may); //GhenTuong
+//            mSocket.emit("rasp_den+ten_cua_may", "REDY-"+ten_code_unique);
             Log.d("test somthing", "test here");
 
         } catch (URISyntaxException e) {
@@ -49,105 +53,71 @@ public class MainActivity extends Activity {
     private static final int DATA_BITS = 8;
     private static final int STOP_BITS = 1;
 
-    private static final int DURATION = 1000;
+    private static final int DURATION = 100;
     private static final int CHUNK_SIZE = 1;
 
     private PeripheralManager mService;
     private UartDevice uartDevice;
 
-    //----------------------------------------
     //==================================================
-    //Arduino command list
-    //--------------------------------------------------
-    private static final byte AR_NhietDo = 10;
-    private static final byte AR_DoAm = 11;
-    private static final byte AR_Quat = 20;
-    private static final byte AR_ACS_Quat = 30;
+    private static String Raspberry_Name = "Raspberry";
 
-    //Arduino value list
-    //--------------------------------------------------
-    private static int AR_Value_NhietDo = 0;
-    private static int AR_Value_DoAm = 0;
     //==================================================
+    private static class general_message {
+        String i;
+        String v;
+    }
 
-    //Read command Arduino----------------------------------------
-    private static long[] Store_Message = new long[32];
-    int Store_Size = 0;
-    private static final int CRC_BASE = 13; // 13
-    private static final char SendData_Start = '@';
-    private static final char SendData_End = ',';
+    /*----------------------------------------
+        UART
+    ----------------------------------------*/
+    private static final int SIZE_MESSAGE = 32;
+    private static final int SIZE_CRC = 8;
+    private static final long CRC_KEY = 0x1D5;
+    private static final char Message_STR = '[';
+    private static final char Message_MID = '|';
+    private static final char Message_END = ']';
+    private static long uin_i_value;
+    private static long uin_v_value;
+    private static byte uin_i_index;
+    private static byte uin_v_index;
+    private static boolean uin_is_i = false;
+    private static boolean uin_is_v = false;
 
-    private static long ReceiveData_Data;
-    private static byte ReceiveData_Location;
-    private static boolean ReceiveData_Ready = false;
-
-    //Send command Socket--------------------------------------------------
-    private static String[] Socket_send_command = new String[32];
-    private static int[] Socket_send_value = new int[32];
-    private static int Socket_send_size = 0;
-    //Read command Socket--------------------------------------------------
-    private static int[] Socket_read_command = new int[32];
-    private static int[] Socket_read_value = new int[32];
-    private static int Socket_read_size = 0;
+    private general_message[] UM = new general_message[32];
+    private static int UM_size = 0;
+    /*----------------------------------------
+        Socket
+    ----------------------------------------*/
+    private general_message[] SM = new general_message[32];
+    private static int SM_size = 0;
     //Socket Listener============================================================
-    private Emitter.Listener S_Quat = new Emitter.Listener() {
+    private Emitter.Listener Server_Listener = new Emitter.Listener() {
         @Override
         public void call(Object... args) {
-            JSONObject object = (JSONObject) args[0];
+            //Log.d(TAG, "Server_Listener");
             try {
-
-//                String data = object.getString("noidung");
-                JSONObject data = object.getJSONObject("noidung");
-                String enable = data.getString("status");
-//                String enable = object.getString("enable");
-                Log.d("data receive led", enable);
-                //--------------------------------------------------
-                Socket_read_command[Socket_read_size] = SR_Quat_Command;
-                Socket_read_value[Socket_read_size] = Integer.parseInt(enable);
-                Socket_read_size++;
+                JSONObject object = (JSONObject) args[0];
+                JSONArray se = object.getJSONArray("data");
+                Log.d("control received: ", se.toString());
+                for (int p = 0; p < 4; p++) {
+                    String i = se.getJSONObject(p).getString("id");
+                    String v = se.getJSONObject(p).getString("status");
+                    SM[SM_size].i = i;
+                    SM[SM_size].v = v;
+                    SM_size++;
+                }
             } catch (JSONException e) {
                 e.printStackTrace();
             }
         }
     };
-    private Emitter.Listener S_getsensor = new Emitter.Listener() {
-        @Override
-        public void call(Object... args) {
-            JSONObject object = (JSONObject) args[0];
-            try {
-//                String data = object.getString("noidung");
-                JSONObject data = object.getJSONObject("noidung");
-                String enable = data.getString("status");
-//                String enable = object.getString("enable");
-                Log.d("data receive sensor", enable);
-                //--------------------------------------------------
-                Socket_read_command[Socket_read_size] = SR_Sensor_Command;
-                Socket_read_value[Socket_read_size] = Integer.parseInt(enable);
-                Socket_read_size++;
-            } catch (JSONException e) {
-                e.printStackTrace();
-            }
-        }
-    };
-    //==================================================
-    //Socket command list
-    private static final byte SR_Sensor_Command = 10;
-    private static final byte SR_Quat_Command = 20;
-    private static final byte SR_ACS_Quat = 30;
-
-
-    //--------------------------------------------------
-    //Socket value list
-    private static final String AS_Value = "";
-    //==================================================
-
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         mSocket.connect();
-        mSocket.on("server_send_data", S_Quat);
-        mSocket.on("server_send_getsensor", S_getsensor);
+        mSocket.on("server_send_control", Server_Listener);
         mService = PeripheralManager.getInstance();
         List<String> deviceList = mService.getUartDeviceList();
         if (deviceList.isEmpty()) {
@@ -167,17 +137,32 @@ public class MainActivity extends Activity {
         }
     }
 
-    //Vòng lặp mỗi 1s==================================================
+    /*
+    Vòng lặp mỗi 100ns
+    */
     private void setupTask() {
         Timer aTimer = new Timer();
         TimerTask aTask = new TimerTask() {
             @Override
             public void run() {
                 try {
-                    Message_Main();
-                    ReadMessage_Server();
-                    SendMessage_Server();
-                } catch (IOException e) {
+                    if (SM_size > 0) {
+                        int p = SM_size - 1;
+                        SM_size--;
+                        int i = s_to_i(SM[p].i);
+                        int v = s_to_i(SM[p].v);
+                        writeUartData(uartDevice, i, v);
+                    }
+                    if (UM_size > 0) {
+                        int p = UM_size - 1;
+                        UM_size--;
+                        String i = UM[p].i;
+                        String v = UM[p].v;
+                        JSONObject obj = new JSONObject();
+                        obj.put(i, v);
+                        mSocket.emit(Raspberry_Name, obj);
+                    }
+                } catch (IOException | JSONException e) {
                     e.printStackTrace();
                 }
             }
@@ -202,7 +187,7 @@ public class MainActivity extends Activity {
         public boolean onUartDeviceDataAvailable(UartDevice uart) {
             // Read available data from the UART device
             try {
-                readUartBuffer(uart);
+                readUartData(uart);
             } catch (IOException e) {
                 Log.w(TAG, "Unable to access UART device", e);
             }
@@ -228,7 +213,7 @@ public class MainActivity extends Activity {
      */
     private void openUart(String name, int baudRate) throws IOException {
         uartDevice = mService.openUartDevice(name);
-        // Configure the UART
+
         uartDevice.setBaudrate(baudRate);
         uartDevice.setDataSize(DATA_BITS);
         uartDevice.setParity(UartDevice.PARITY_NONE);
@@ -252,129 +237,128 @@ public class MainActivity extends Activity {
     }
 
     //Đọc dữ liệu nhận được và giải mã ra lệnh và lưu vào Store_Message==================================================
-    public void readUartBuffer(UartDevice uart) throws IOException {
+    public void readUartData(UartDevice uart) throws IOException {
         // Maximum amount of data to read at one time
         byte[] buffer = new byte[CHUNK_SIZE];
         while ((uart.read(buffer, buffer.length)) > 0) {
-            char Data = (char) buffer[0];
-            if (Data == '\n') {
-                return;
+            char pick = (char) buffer[0];
+            if (pick == '\n') {
+                continue;
             }
-            if (Data == SendData_Start) {
-                ReceiveData_Ready = true;
-                ReceiveData_Data = 0;
-                ReceiveData_Location = 7;
-                return;
+            if (pick == Message_STR) {
+                uin_i_value = 0;
+                uin_i_index = 5;
+                uin_is_i = true;
+                uin_is_v = false;
+                continue;
             }
-            if (Data == SendData_End) {
-                ReceiveData_Ready = false;
-                if ((ReceiveData_Data % CRC_BASE) == 0) {
-                    Store_Message[Store_Size] = ReceiveData_Data;
-                    Store_Size++;
+            if (pick == Message_MID) {
+                uin_v_value = 0;
+                uin_v_index = 5;
+                uin_is_i = false;
+                uin_is_v = true;
+                continue;
+            }
+            if (pick == Message_END) {
+                if (message_check(uin_i_value) && message_check(uin_v_value)) {
+                    int i = (int)(uin_i_value >> SIZE_CRC);
+                    int v = (int)(uin_v_value >> SIZE_CRC);
+                    UM[UM_size].i = i_to_s(i);
+                    UM[UM_size].v = i_to_s(v);
+                    UM_size++;
                 }
-                return;
+                uin_is_i = false;
+                uin_is_v = false;
+                continue;
             }
-            if (ReceiveData_Ready && ReceiveData_Location > -1) {
-                ReceiveData_Data = ReceiveData_Data | (Long.parseLong(Character.toString(Data), 16) << (ReceiveData_Location * 4));
-                ReceiveData_Location--;
-                return;
+            if (uin_is_i && (uin_i_index >= 0)) {
+                uin_i_value = uin_i_value | (Long.parseLong(Character.toString(pick), 16) << (uin_i_index * 4));
+                uin_i_index--;
+                continue;
+            }
+            if (uin_is_v && (uin_v_index >= 0)) {
+                uin_v_value = uin_v_value | (Long.parseLong(Character.toString(pick), 16) << (uin_v_index * 4));
+                uin_v_index--;
+                continue;
             }
         }
     }
 
-    //Chuyển đổi nội dung lệnh Intel-Data sang định dạng gói tin "@IntelData," rồi gửi lên đường truyền==================================================
-    public void writeUartData(UartDevice uart, byte Intel, int Data) throws IOException {
-        long SendData_reg;
-        SendData_reg = (long) 1 << 31;
-        SendData_reg = SendData_reg | ((long) Intel << 24);
-        SendData_reg = SendData_reg | ((long) Data << 8);
-        long CRC_odd = SendData_reg % CRC_BASE;
-        CRC_odd = CRC_BASE - CRC_odd;
-        SendData_reg = SendData_reg | CRC_odd;
-
-        byte[] buffer = (SendData_Start + Long.toHexString(SendData_reg) + SendData_End).getBytes();
+    public void writeUartData(UartDevice uart, int i, int v) throws IOException {
+        long cache_i = message_generate(i);
+        long cache_v = message_generate(v);
+        String ST = "";
+        ST = ST + Message_STR;
+        for (int count = 5; count >= 0; count--) {
+            int B = (int) ((cache_i >> (count * 4)) & 0xF);
+            ST = ST + Integer.toHexString(B);
+        }
+        ST = ST + Message_MID;
+        for (int count = 5; count >= 0; count--) {
+            int B = (int) ((cache_v >> (count * 4)) & 0xF);
+            ST = ST + Integer.toHexString(B);
+        }
+        ST = ST + Message_END;
+        byte[] buffer = ST.getBytes();
         int count = uart.write(buffer, buffer.length);
         uart.flush(UartDevice.FLUSH_OUT);
-        Log.d(TAG, "Message: " + new String(buffer));
+        Log.d(TAG, "UART => Arduino: " + new String(buffer) + " " + count);
     }
-
-    //Đọc và xử lý lệnh đang có trong Store_Message từ Arduino==================================================
-    public void Message_Main() throws IOException {
-        while (Store_Size > 0) {
-            long Readed_Message = Store_Message[Store_Size - 1];
-            Store_Size--;
-            byte Readed_Command = (byte) ((Readed_Message >>> 24) & 0x7F);
-            int Readed_Value = (int) ((Readed_Message >>> 8) & 0xFFFF);
-            Log.d(TAG, "Message | Command | Value : " + Readed_Message + " | " + Readed_Command + " | " + Readed_Value);
-
-            switch (Readed_Command) {
-                case AR_NhietDo:
-                    AR_Value_NhietDo = Readed_Value;
-                    Log.d(TAG, "AR_Value_NhietDo has been updated. Value = " + AR_Value_NhietDo);
-                    break;
-                case AR_DoAm:
-                    AR_Value_DoAm = Readed_Value;
-                    Log.d(TAG, "AR_Value_DoAm has been updated. Value = " + AR_Value_DoAm);
-                    break;
-                case AR_Quat:
-                    AR_Value_DoAm = Readed_Value;
-                    Socket_send_command[Socket_send_size] = "Relay";
-                    Socket_send_value[Socket_send_size] = Readed_Value;
-                    Socket_send_size++;
-                    Log.d(TAG, "Relay = " + Readed_Value);
-                    break;
-                case AR_ACS_Quat:
-                    Log.d(TAG, "AR_ACS_Quat = " + Readed_Value);
-                    break;
-                default:
-                    Log.d(TAG, "Undefined command.");
-                    break;
+    /*
+    CRC
+     */
+    private long message_generate(int data) {
+        long odd = data << SIZE_CRC;
+        for (int i = (SIZE_MESSAGE - 1); i >= SIZE_CRC; i--) {
+            long check = odd >> i;
+            if (check != 0) {
+                long divisor = CRC_KEY << (i - SIZE_CRC);
+                odd = odd ^ divisor;
             }
         }
+        return (data << SIZE_CRC) | odd;
     }
 
-    //Gửi dữ liệu lên Server Socket==================================================
-    public void SendMessage_Server() {
-        JSONObject my_obj = new JSONObject();
-        boolean my_obj_check = false;
-        while (Socket_send_size > 0) {
-            Socket_send_size--;
-            try {
-                my_obj.put(Socket_send_command[Socket_send_size], Socket_send_value[Socket_send_size]);
-            } catch (JSONException e) {
-                e.printStackTrace();
+    private boolean message_check(long message) {
+        if ((message >> SIZE_CRC) == 0) {
+            return false;
+        }
+        long odd = message;
+        for (int i = (SIZE_MESSAGE - 1); i >= SIZE_CRC; i--) {
+            long check = odd >> i;
+            if (check != 0) {
+                long divisor = CRC_KEY << (i - SIZE_CRC);
+                odd = odd ^ divisor;
             }
-            Log.d(TAG, "Message to Server: put");
-            my_obj_check = true;
         }
-        if (my_obj_check) {
-            mSocket.emit("rasp_send_data", my_obj);
-            Log.d(TAG, "Message to Server: done");//Không biết viết log thế nào luôn.
-        }
+        return odd == 0;
     }
 
-    //Đọc và xử lý lệnh từ Server==================================================
-    public void ReadMessage_Server() throws IOException {
-        while (Socket_read_size > 0) {
-            Socket_read_size--;
-            switch (Socket_read_command[Socket_read_size]) {
-                case SR_Quat_Command:
-                    writeUartData(uartDevice, AR_Quat, Socket_read_value[Socket_read_size]);
-                    break;
-                case SR_Sensor_Command:
-                    Socket_send_command[Socket_send_size] = "NhietDo";
-                    Socket_send_value[Socket_send_size] = AR_Value_NhietDo;
-                    Socket_send_size++;
-                    Socket_send_command[Socket_send_size] = "DoAm";
-                    Socket_send_value[Socket_send_size] = AR_Value_DoAm;
-                    Socket_send_size++;
-                    break;
-                default:
-                    break;
+    private String i_to_s(int i) {
+        /*
+        I don't know what is StringBuilder.
+        Trying s += x; and it guides me this.
+         */
+        StringBuilder s = new StringBuilder();
+        for (int p = 0; p < 2; p++) {
+            byte x = (byte) (0xFF & (i >> (p * 8)));
+            if (x != 0) {
+                s.append(x);
             }
         }
+        return s.toString();
     }
-    //==================================================
-    //Đảm bảo gói tin truyền nhận được.
-    //==================================================
+
+    private int s_to_i(String s) {
+        int i = 0;
+        int l = s.length();
+        byte[] x = s.getBytes();
+        if (l > 0) {
+            i = i | x[0];
+        }
+        if (l > 1) {
+            i = i | (x[1] << 8);
+        }
+        return i;
+    }
 }
