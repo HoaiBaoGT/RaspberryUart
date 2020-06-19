@@ -33,14 +33,13 @@ public class MainActivity extends Activity {
 
     {
         try {
-            mSocket = IO.socket("http://52.163.241.147:5000");
+            mSocket = IO.socket("http://192.168.2.18:5000");
             String ten_cua_may = "abc123";
-            mSocket.emit("rasp-ready", ten_cua_may); //GhenTuong
-//            mSocket.emit("rasp_den+ten_cua_may", "REDY-"+ten_code_unique);
-            Log.d("test somthing", "test here");
+            mSocket.emit("rasp-ready", ten_cua_may);
+            Log.d(TAG, "Socket connected.");
 
         } catch (URISyntaxException e) {
-            Log.d("test somthing", "can not connect");
+            Log.d(TAG, "Socket can not connect.");
         }
     }
 
@@ -60,7 +59,7 @@ public class MainActivity extends Activity {
     private UartDevice uartDevice;
 
     //==================================================
-    private static String Raspberry_Name = "Raspberry";
+    private static String Raspberry_Name = "rasp_send_data";
 
     //==================================================
     private static class general_message {
@@ -84,12 +83,14 @@ public class MainActivity extends Activity {
     private static boolean uin_is_i = false;
     private static boolean uin_is_v = false;
 
-    private general_message[] UM = new general_message[32];
+    private static int[] UM_i = new int[32];
+    private static int[] UM_v = new int[32];
     private static int UM_size = 0;
     /*----------------------------------------
         Socket
     ----------------------------------------*/
-    private general_message[] SM = new general_message[32];
+    private static int[] SM_i = new int[32];
+    private static int[] SM_v = new int[32];
     private static int SM_size = 0;
     //Socket Listener============================================================
     private Emitter.Listener Server_Listener = new Emitter.Listener() {
@@ -100,11 +101,14 @@ public class MainActivity extends Activity {
                 JSONObject object = (JSONObject) args[0];
                 JSONArray se = object.getJSONArray("data");
                 Log.d("control received: ", se.toString());
-                for (int p = 0; p < 4; p++) {
+                String code = object.getString("machine");
+                Log.d("code received: ", code);
+
+                for (int p = 0; p < se.length(); p++) {
                     String i = se.getJSONObject(p).getString("id");
                     String v = se.getJSONObject(p).getString("status");
-                    SM[SM_size].i = i;
-                    SM[SM_size].v = v;
+                    SM_i[SM_size] = s_to_i(i);
+                    SM_v[SM_size] = s_to_i(v);
                     SM_size++;
                 }
             } catch (JSONException e) {
@@ -140,6 +144,7 @@ public class MainActivity extends Activity {
     /*
     Vòng lặp mỗi 100ns
     */
+    int test = 0;
     private void setupTask() {
         Timer aTimer = new Timer();
         TimerTask aTask = new TimerTask() {
@@ -147,21 +152,37 @@ public class MainActivity extends Activity {
             public void run() {
                 try {
                     if (SM_size > 0) {
-                        int p = SM_size - 1;
                         SM_size--;
-                        int i = s_to_i(SM[p].i);
-                        int v = s_to_i(SM[p].v);
+                        int i = SM_i[SM_size];
+                        int v = SM_v[SM_size];
                         writeUartData(uartDevice, i, v);
                     }
+
                     if (UM_size > 0) {
-                        int p = UM_size - 1;
                         UM_size--;
-                        String i = UM[p].i;
-                        String v = UM[p].v;
+                        String i = i_to_s(UM_i[UM_size]);
+                        int v = UM_v[UM_size];
+                        Log.d(TAG, i + "|" + v);
+
                         JSONObject obj = new JSONObject();
-                        obj.put(i, v);
+                        JSONObject objChild= new JSONObject();
+
+                        objChild.put(i, v);
+                        obj.put("machine","abc123");
+                        obj.put("data",objChild);
                         mSocket.emit(Raspberry_Name, obj);
+                        if (UM_size == 0){
+                            JSONObject tmp = new JSONObject();
+                            tmp.put("machine","abc123");
+                            mSocket.emit("rasp_send_data_complete",tmp);
+                        }
                     }
+                    /*
+                    test = (test + 1) % 4;
+                    int x = s_to_i("R" + Integer.toString(test+1));
+                    int y = s_to_i("T");
+                    writeUartData(uartDevice, x, y);
+                    */
                 } catch (IOException | JSONException e) {
                     e.printStackTrace();
                 }
@@ -260,12 +281,13 @@ public class MainActivity extends Activity {
                 continue;
             }
             if (pick == Message_END) {
-                if (message_check(uin_i_value) && message_check(uin_v_value)) {
+                if (message_check(uin_i_value) && message_check(uin_v_value) && (UM_size < 31)) {
                     int i = (int)(uin_i_value >> SIZE_CRC);
                     int v = (int)(uin_v_value >> SIZE_CRC);
-                    UM[UM_size].i = i_to_s(i);
-                    UM[UM_size].v = i_to_s(v);
+                    UM_i[UM_size] = i;
+                    UM_v[UM_size] = v;
                     UM_size++;
+                    Log.d(TAG, "UART <= Arduino: " + "[" + i_to_s(i) + "|" + v + "]");
                 }
                 uin_is_i = false;
                 uin_is_v = false;
@@ -335,18 +357,15 @@ public class MainActivity extends Activity {
     }
 
     private String i_to_s(int i) {
-        /*
-        I don't know what is StringBuilder.
-        Trying s += x; and it guides me this.
-         */
-        StringBuilder s = new StringBuilder();
-        for (int p = 0; p < 2; p++) {
-            byte x = (byte) (0xFF & (i >> (p * 8)));
-            if (x != 0) {
-                s.append(x);
+        byte[] x = new byte[2];
+        for (int p = 0; p < 2; p++){
+            byte get = (byte)(0xFF & (i >> (p*8)));
+            if (get !=0){
+                x[p] = get;
             }
         }
-        return s.toString();
+        String s = new String(x);
+        return s;
     }
 
     private int s_to_i(String s) {
